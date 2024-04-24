@@ -1,6 +1,11 @@
 import math
-import openpyxl as xl
+import pandas as pd
+from sklearn.linear_model import LinearRegression #I recently learned and cited this
+from bokeh.plotting import figure, show
+from bokeh.models import Label, HoverTool, ColumnDataSource #I also learned hovertool and ColumnDataSource and cited these
+from bokeh.layouts import gridplot
 
+#Distance formula using latitude, longitude and converting to miles
 def distance(s_lat, s_lon, d_lat, d_lon):
     earth_radius = 3959.0
 
@@ -13,104 +18,162 @@ def distance(s_lat, s_lon, d_lat, d_lon):
 
     return 2 * earth_radius * math.asin(math.sqrt(dist))
 
+#Range function that specifies the amount to increment by
+def drange(start, stop, step):
+    while start < stop:
+            yield start
+            start += step
 
+#Gathering median household income data from spreadsheet
 zip_info = []
 med_household_income = 84385
 low_income_limit = 54300
-income_database = xl.load_workbook('zip_code_income_edit.xlsx')
-income_sheet = income_database['Sheet1']
-'''with open('zip_code_income_edit.txt', 'r', encoding='utf-8') as file:
-    income_database = file.readlines()
-for zip in income_database:
-    num, income, ignore, zipcode, ignore, lat, lon = income_database.strip().split('    ')
-    zip_info.append(zipcode, income, lat, lon)'''
-zipincome_col = 2
-zipcode2_col = 5
-row = 1
-zip2lat_col = 6
-zip2lon_col = 7
+income_database = pd.read_csv('zip_code_income_edit.csv')
+zipincome_col = '$203,009 '#Column names (what it says in the first row of the desired columns)
+zipcode2_col = '02468'
+zip2lat_col = '42.32'
+zip2lon_col = '-71.23'
 
-MA_zipcodes2 = []
-for row in range(2, 523):
-        MA_zipcode2 = ['0' + str(income_sheet.cell(row, zipcode2_col).value),
-                      income_sheet.cell(row, zip2lat_col).value,
-                      income_sheet.cell(row, zip2lon_col).value, income_sheet.cell(row, zipincome_col).value]
-        MA_zipcodes2.append(MA_zipcode2)
+#stores above information in a list of lists
+for row in range(0, income_database.shape[0]):
+    MA_zipcode = ['0' + str(income_database.at[row, zipcode2_col]).strip(' '),
+                   income_database.at[row, zip2lat_col],
+                   income_database.at[row, zip2lon_col],
+                   int(income_database.at[row, zipincome_col].strip('$ ').replace(",", ""))]
+    zip_info.append(MA_zipcode)
 
-print(str(len(zip_info)))
+#Gathering greenhouse gas emission data from spreadsheet
+emission_limit = 10000
+emission_sheet = pd.read_csv('ghgp_data_copy.csv')
+emission_facility_id_col = '1005184'#Column names
+emission_facility_name_col = 'ALYESKA PIPELINE SE/TAPS PUMP STATION 01'
+emission_state_col = 'AK'
+emission_lat_col = '70.26'
+emission_lon_col = '-148.62'
+emission_amount_col = '72699.974'
 
-# get facilities with emission greater than 1,000
-emission_data = xl.load_workbook('ghgp_data_2021.xlsx')
-emission_sheet = emission_data['Direct Emitters']
-emission_facility_id_col = 1
-emission_facility_name_col = 3
-emission_state_col = 5
-emission_lat_col = 9
-emission_lon_col = 10
-emission_amount_col = 14
-emission_limit = 40000
-
+#turns desired spreadsheet data into a list of lists
 MA_emission_sources = []
-for row in range(5, emission_sheet.max_row + 1):
-    if emission_sheet.cell(row, emission_state_col).value == 'MA' and \
-            emission_sheet.cell(row, emission_amount_col).value >= emission_limit:
-        MA_emission_source = [emission_sheet.cell(row, emission_facility_id_col).value,
-                              emission_sheet.cell(row, emission_facility_name_col).value,
-                              emission_sheet.cell(row, emission_lat_col).value,
-                              emission_sheet.cell(row, emission_lon_col).value,
-                              emission_sheet.cell(row, emission_amount_col).value]#(facility ID, facility name, latitude, longitude, emission amount)
+for index, row in emission_sheet.iterrows():
+    if row[emission_state_col] == 'MA' and row[emission_amount_col] >= emission_limit:#only uses Massachusetts emitters
+        MA_emission_source = [
+            row[emission_facility_id_col],
+            row[emission_facility_name_col],
+            row[emission_lat_col],
+            row[emission_lon_col],
+            row[emission_amount_col]
+        ]
         MA_emission_sources.append(MA_emission_source)
-        
-print(len(MA_emission_sources))
 
+#finds low income zipcodes
 zipcodes_low_income = []
 for zip in zip_info:
     if zip[3] < low_income_limit:
         zipcodes_low_income.append([zip[0], zip[3]])
 
-print(len(zipcodes_low_income))
-
-radiusemissions = []
+#uses a for loops to determine which zip codes are within a certain distance from the radius
+#stores values in a dictionary (values will repeat, as ones within 1 mile are also within 2)
 radius = 0
-radius_step = 1
+radius_step = 0.5
 radius_last = 5
 zip_high_emissions = []
-for radius in range(radius, radius_last):
+index = 0
+for radius in drange(radius, radius_last, radius_step):
     radius = radius + radius_step 
-    for item1 in zip_info:
+    for zipc in zip_info:#list of zipcode information
+        index += 1
         total_emission = 0.0
-        for item2 in MA_emission_sources:
-            d = distance(item1[1], item1[2], item2[2], item2[3])
+        for item2 in MA_emission_sources:#list of emission sources
+            d = distance(zipc[1], zipc[2], item2[2], item2[3])
             if d < radius:
                 total_emission += item2[4]
-                if total_emission > 0.0:
-                    zip_high_emissions.append([radius, item1[0], total_emission, item1[3], item1[1], item1[2]])
-        radiusemissions.append([radius, item1[0], total_emission, item1[3], item1[1], item1[2]])
+        if total_emission > 0.0:
+            dictionary = {
+                'radius': radius,
+                'zipcodes': zipc[0],
+                'emissions': total_emission,
+                'income': zipc[3],
+                'latitudes': zipc[1],
+                'longitudes': zipc[2] 
+            }
+            zip_high_emissions.append(dictionary)
+#radius, zip, emissions, income, lat, lon
 
-radius_high_emissions_zip = []
-zipcodes_high_emissions = []
-for radius in range(radius, radius_last):
-   radius = radius + radius_step
-   for item1 in zip_info:
-       total_emission = 0.0
-       for item2 in MA_emission_sources:
-           d = distance(item1[1], item1[2], item2[2], item2[3])
-           if d < radius:
-               total_emission += item2[4]
-               print('Facility name: ' + item2[1] + '           Emission: ' + str(item2[4]))
-       if total_emission > 0.0:
-           zipcodes_high_emissions.append([radius, item1[0], total_emission, item1[3], item1[1], item1[2]])
-           print('Zipcode: ' + item1[0] + '           Total emission: ' + str(total_emission) + '             Median Household Income: $' + str(item1[3]))
-           print('***********************************************************')
-   print('Total number of MA zipcodes within ' + str(radius) + ' miles of at least 1,000 tons of direct greenhouse gas emission: ' +
-       str(len(zipcodes_high_emissions)))
-   print('***********************************************************')
-   print('***********************************************************')
-   print('***********************************************************')
-   print('***********************************************************')
-   print('***********************************************************')
-   total_med_income = 0
-   for zip in zipcodes_high_emissions:
-       total_med_income = zip[2]
-   radius_high_emissions_zip.append([radius, len(zipcodes_high_emissions), total_med_income/len(zipcodes_high_emissions)])
-print(radius_high_emissions_zip)
+plots = []#List of plots
+
+#ColumnDataSource in bokeh
+data = ColumnDataSource(data=dict(
+    zipcodes=[],
+    income=[],
+    emissions=[],
+    latitudes=[],
+    longitudes=[]
+))
+
+#used in hovertool in bokeh
+tooltips = [("Zip Code", "@zipcodes"), ("Median Income", "@income"), ("Total Emissions", "@emissions"), ("Latitude", "@latitudes"), ("Longitude", "@longitudes")]
+hover = HoverTool(tooltips = tooltips)
+hover.point_policy = "follow_mouse"
+
+#makes a plot for each radius increment
+for rad in drange(0.5, 5, 0.5):
+    rad += 0.5
+    filtered_data = [x for x in zip_high_emissions if x['radius'] == rad]
+    x_range = (0, 2500000)
+    y_range = (0, 250000)
+
+    #taking data from zip_high_emissions dictionary
+    emissions = [x['emissions'] for x in filtered_data]
+    income = [x['income'] for x in filtered_data]
+    zipcodes = [x['zipcodes'] for x in filtered_data]
+    latitudes = [x['latitudes'] for x in filtered_data]
+    longitudes = [x['longitudes'] for x in filtered_data]
+
+    X_reshaped = [[val] for val in emissions]
+    
+    #linear regression
+    reg = LinearRegression()
+    reg.fit(X_reshaped, income)
+    y_pred = reg.predict(X_reshaped)
+    
+    data.data = dict(
+    zipcodes=zipcodes,
+    income=income,
+    emissions=emissions,
+    latitudes=latitudes,
+    longitudes=longitudes
+    )
+
+    # Plot the data points and the regression line
+    p = figure(x_range=x_range, y_range=y_range, title='Linear Regression for radius ' + str(rad), x_axis_label='total emissions', y_axis_label='median household income', tooltips = tooltips, tools=[hover, 'crosshair'])
+    for i in range(len(emissions)): #makes the low income ones red
+        if income[i] < low_income_limit:
+            p.scatter(emissions[i], income[i], color='red', legend_label=f'Radius {rad}', source = data)
+        else:
+            p.scatter(emissions[i], income[i], color='black', legend_label=f'Radius {rad}', source = data)    
+    p.line(emissions, y_pred, line_width=2, color='red', legend_label=f'Linear Regression (Radius {rad})')
+
+    #more linear regression
+    slope = reg.coef_[0]
+    intercept = reg.intercept_
+    r_squared = reg.score(X_reshaped, income)
+    equation = f'y = {slope:.2f}x + {intercept:.2f}'
+    r_squared_text = f'R-squared: {r_squared:.2f}'
+    
+    #adds R^2 values and equations for 
+    label_equation = Label(x=min(emissions), y=max(income), text=equation, text_color='green', text_font_size='10pt')
+    label_rsquared = Label(x=min(emissions), y=max(income) - (max(income) - min(income)) * 0.1, text=r_squared_text, text_color='green', text_font_size='10pt')
+    p.add_layout(label_equation)
+    p.add_layout(label_rsquared)
+
+    #adds hover tool
+    p.add_tools(hover)
+
+    #adds p to plot list
+    plots.append(p)
+
+    p.legend.location = 'bottom_right'
+
+#makes a grid plot of all plots in list
+grid = gridplot(plots, ncols=3)
+show(grid)
